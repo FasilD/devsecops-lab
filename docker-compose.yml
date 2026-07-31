@@ -1,0 +1,9 @@
+services:
+  devsecops-lab:
+    image: devsecops-lab:alpine-fixed
+    container_name: devsecops-lab
+    ports:
+      - "8080:8080"
+    environment:
+      MERCHANT_USER_PASSWORD: ${MERCHANT_USER_PASSWORD}
+      ADMIN_USER_PASSWORD: ${ADMIN_USER_PASSWORD}

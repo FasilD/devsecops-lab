@@ -2,16 +2,17 @@ package com.fasild.devsecops_lab.payment;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
-import org.springframework.transaction.annotation.Transactional;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -26,6 +27,7 @@ class PaymentControllerTest {
     @Test
     void shouldReturnAllPayments() throws Exception {
         mockMvc.perform(get("/api/payments")
+                        .with(user("merchant-user").roles("USER"))
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
@@ -33,21 +35,23 @@ class PaymentControllerTest {
 
     @Test
     void shouldReturnNotFoundForUnknownPayment() throws Exception {
-        mockMvc.perform(get("/api/payments/999"))
+        mockMvc.perform(get("/api/payments/999")
+                        .with(user("merchant-user").roles("USER")))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void shouldRejectPaymentWithNegativeAmount() throws Exception {
         String requestBody = """
-        {
-          "merchantId": "merchant-test",
-          "description": "Invalid payment",
-          "amount": -10.00
-        }
-        """;
+                {
+                  "merchantId": "merchant-test",
+                  "description": "Invalid payment",
+                  "amount": -10.00
+                }
+                """;
 
         mockMvc.perform(post("/api/payments")
+                        .with(user("merchant-user").roles("USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
@@ -58,14 +62,15 @@ class PaymentControllerTest {
     @Test
     void shouldCreateValidPayment() throws Exception {
         String requestBody = """
-        {
-          "merchantId": "merchant-test",
-          "description": "Security assessment",
-          "amount": 450.00
-        }
-        """;
+                {
+                  "merchantId": "merchant-test",
+                  "description": "Security assessment",
+                  "amount": 450.00
+                }
+                """;
 
         mockMvc.perform(post("/api/payments")
+                        .with(user("merchant-user").roles("USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isCreated())
@@ -78,14 +83,15 @@ class PaymentControllerTest {
     @Test
     void shouldUpdateExistingPayment() throws Exception {
         String requestBody = """
-        {
-          "merchantId": "merchant-a",
-          "description": "Updated equipment purchase",
-          "amount": 300.00
-        }
-        """;
+                {
+                  "merchantId": "merchant-a",
+                  "description": "Updated equipment purchase",
+                  "amount": 300.00
+                }
+                """;
 
         mockMvc.perform(put("/api/payments/1")
+                        .with(user("merchant-user").roles("USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isOk())
@@ -96,11 +102,33 @@ class PaymentControllerTest {
     }
 
     @Test
-    void shouldDeleteExistingPayment() throws Exception {
-        mockMvc.perform(delete("/api/payments/2"))
+    void shouldDeleteExistingPaymentAsAdmin() throws Exception {
+        mockMvc.perform(delete("/api/payments/2")
+                        .with(user("admin-user").roles("ADMIN")))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/api/payments/2"))
+        mockMvc.perform(get("/api/payments/2")
+                        .with(user("admin-user").roles("ADMIN")))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldForbidRegularUserFromDeletingPayment() throws Exception {
+        mockMvc.perform(delete("/api/payments/2")
+                        .with(user("merchant-user").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shouldRejectUnauthenticatedRequest() throws Exception {
+        mockMvc.perform(get("/api/payments"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shouldAllowUnauthenticatedHealthCheck() throws Exception {
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
     }
 }

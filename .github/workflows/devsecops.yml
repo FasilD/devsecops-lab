@@ -72,6 +72,7 @@ jobs:
           mkdir -p reports/semgrep
           mkdir -p reports/gitleaks
           mkdir -p reports/trivy
+          mkdir -p reports/zap
 
       # ------------------------------------------------------------
       # 6. OWASP Dependency-Check SCA
@@ -137,7 +138,7 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
       # ------------------------------------------------------------
-      # 11. Display vulnerability summary
+      # 11. Display security scan summary
       # ------------------------------------------------------------
       - name: Display security summary
         if: always()
@@ -202,7 +203,7 @@ jobs:
           echo "========================================"
 
       # ------------------------------------------------------------
-      # 12. Enforce container security gate
+      # 12. Enforce Trivy security gate
       # ------------------------------------------------------------
       - name: Enforce Trivy security gate
         run: |
@@ -225,9 +226,53 @@ jobs:
           echo "No HIGH or CRITICAL vulnerabilities found."
 
       # ------------------------------------------------------------
-      # 13. Upload application JAR
+      # 13. Start application container for DAST
+      # ------------------------------------------------------------
+      - name: Start application container
+        run: |
+          docker run -d \
+            --name devsecops-lab-dast \
+            -p 127.0.0.1:8080:8080 \
+            -e MERCHANT_USER_PASSWORD='TestUserPassword123!' \
+            -e ADMIN_USER_PASSWORD='TestAdminPassword123!' \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+
+      # ------------------------------------------------------------
+      # 14. Wait for application to become healthy
+      # ------------------------------------------------------------
+      - name: Wait for application
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent \
+              http://127.0.0.1:8080/actuator/health; then
+              echo
+              echo "Application is ready for DAST."
+              exit 0
+            fi
+
+            echo "Waiting for application... attempt ${attempt}/30"
+            sleep 5
+          done
+
+          echo "Application did not become healthy."
+          docker logs devsecops-lab-dast
+          exit 1
+
+      # ------------------------------------------------------------
+      # 15. Stop temporary DAST application container
+      # This step will move after the ZAP step when ZAP is added
+      # ------------------------------------------------------------
+      - name: Stop application container
+        if: always()
+        run: |
+          docker logs devsecops-lab-dast || true
+          docker rm -f devsecops-lab-dast || true
+
+      # ------------------------------------------------------------
+      # 16. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: devsecops-lab-jar
@@ -236,7 +281,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 14. Upload security reports
+      # 17. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports
@@ -249,5 +294,6 @@ jobs:
             reports/semgrep/*.json
             reports/gitleaks/*.json
             reports/trivy/*.json
+            reports/zap/*
           if-no-files-found: warn
           retention-days: 7

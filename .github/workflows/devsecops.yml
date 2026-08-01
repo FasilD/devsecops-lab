@@ -1,0 +1,188 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: devsecops-lab
+  IMAGE_TAG: ci
+
+jobs:
+  build-test-security:
+    name: Build, Test and Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------
+      # 1. Checkout source code
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 2. Configure Java and Maven cache
+      # ------------------------------------------------------------
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # ------------------------------------------------------------
+      # 3. Run automated tests
+      # ------------------------------------------------------------
+      - name: Run Maven tests
+        env:
+          MERCHANT_USER_PASSWORD: TestUserPassword123!
+          ADMIN_USER_PASSWORD: TestAdminPassword123!
+        run: ./mvnw --batch-mode clean test
+
+      # ------------------------------------------------------------
+      # 4. Build the Spring Boot JAR
+      # ------------------------------------------------------------
+      - name: Build application
+        env:
+          MERCHANT_USER_PASSWORD: TestUserPassword123!
+          ADMIN_USER_PASSWORD: TestAdminPassword123!
+        run: ./mvnw --batch-mode package -DskipTests
+
+      # ------------------------------------------------------------
+      # 5. Prepare security report directories
+      # ------------------------------------------------------------
+      - name: Create report directories
+        run: |
+          mkdir -p reports/semgrep
+          mkdir -p reports/gitleaks
+          mkdir -p reports/trivy
+
+      # ------------------------------------------------------------
+      # 6. Semgrep SAST
+      # ------------------------------------------------------------
+      - name: Run Semgrep SAST
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            semgrep/semgrep:latest \
+            semgrep scan \
+            --config auto \
+            --json \
+            --output /src/reports/semgrep/semgrep.json \
+            /src
+
+      # ------------------------------------------------------------
+      # 7. Gitleaks secret scanning
+      # ------------------------------------------------------------
+      - name: Run Gitleaks
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            git  /repo \
+            --report-path=/repo/reports/gitleaks/gitleaks.json \
+            --report-format=json \
+            --no-banner
+
+      # ------------------------------------------------------------
+      # 8. Build hardened Docker image
+      # ------------------------------------------------------------
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "${IMAGE_NAME}:${IMAGE_TAG}" \
+            .
+
+      # ------------------------------------------------------------
+      # 9. Scan Docker image with Trivy
+      # ------------------------------------------------------------
+      - name: Run Trivy vulnerability scan
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$GITHUB_WORKSPACE/reports/trivy:/reports" \
+            aquasec/trivy:0.72.0 \
+            image \
+            --scanners vuln \
+            --format json \
+            --output /reports/trivy-image.json \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+
+      # ------------------------------------------------------------
+      # 10. Display vulnerability summary
+      # ------------------------------------------------------------
+      - name: Display Trivy summary
+        run: |
+          TOTAL=$(jq '[.Results[]?.Vulnerabilities[]?] | length' \
+            reports/trivy/trivy-image.json)
+
+          HIGH_CRITICAL=$(jq \
+            '[.Results[]?.Vulnerabilities[]?
+              | select(
+                  .Severity == "HIGH" or
+                  .Severity == "CRITICAL"
+                )
+            ] | length' \
+            reports/trivy/trivy-image.json)
+
+          echo "Total vulnerabilities: $TOTAL"
+          echo "HIGH/CRITICAL vulnerabilities: $HIGH_CRITICAL"
+
+      # ------------------------------------------------------------
+      # 11. Enforce container security gate
+      # ------------------------------------------------------------
+      - name: Enforce Trivy security gate
+        run: |
+          HIGH_CRITICAL=$(jq \
+            '[.Results[]?.Vulnerabilities[]?
+              | select(
+                  .Severity == "HIGH" or
+                  .Severity == "CRITICAL"
+                )
+            ] | length' \
+            reports/trivy/trivy-image.json)
+
+          if [ "$HIGH_CRITICAL" -gt 0 ]; then
+            echo "Security gate failed."
+            echo "$HIGH_CRITICAL HIGH or CRITICAL vulnerabilities found."
+            exit 1
+          fi
+
+          echo "Security gate passed."
+          echo "No HIGH or CRITICAL vulnerabilities found."
+
+      # ------------------------------------------------------------
+      # 12. Upload application JAR
+      # ------------------------------------------------------------
+      - name: Upload application artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devsecops-lab-jar
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+      # ------------------------------------------------------------
+      # 13. Upload security reports
+      # Runs even when an earlier security step fails
+      # ------------------------------------------------------------
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            reports/semgrep/*.json
+            reports/gitleaks/*.json
+            reports/trivy/*.json
+          if-no-files-found: warn
+          retention-days: 7

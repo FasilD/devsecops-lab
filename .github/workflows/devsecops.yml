@@ -258,9 +258,24 @@ jobs:
           docker logs devsecops-lab-dast
           exit 1
 
+            # ------------------------------------------------------------
+      # 15. Run OWASP ZAP baseline DAST
       # ------------------------------------------------------------
-      # 15. Stop temporary DAST application container
-      # This step will move after the ZAP step when ZAP is added
+      - name: Run OWASP ZAP baseline scan
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$GITHUB_WORKSPACE/reports/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://127.0.0.1:8080/actuator/health \
+            -J zap-report.json \
+            -r zap-report.html \
+            -w zap-report.md \
+            -I
+
+      # ------------------------------------------------------------
+      # 16. Stop DAST application container
       # ------------------------------------------------------------
       - name: Stop application container
         if: always()
@@ -269,7 +284,7 @@ jobs:
           docker rm -f devsecops-lab-dast || true
 
       # ------------------------------------------------------------
-      # 16. Upload application JAR
+      # 17. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
         if: success()
@@ -281,7 +296,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 17. Upload security reports
+      # 18. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports

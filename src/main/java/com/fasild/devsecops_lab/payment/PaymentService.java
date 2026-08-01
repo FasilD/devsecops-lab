@@ -23,6 +23,7 @@ public class PaymentService {
     }
 
     public Payment createPayment(Payment payment) {
+        payment.setId(null);
         return repository.save(payment);
     }
 

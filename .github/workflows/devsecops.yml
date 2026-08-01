@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
+
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,6 +42,9 @@ jobs:
           java-version: "21"
           cache: maven
 
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
       # ------------------------------------------------------------
       # 3. Run automated tests
       # ------------------------------------------------------------
@@ -62,12 +68,25 @@ jobs:
       # ------------------------------------------------------------
       - name: Create report directories
         run: |
+          mkdir -p reports/dependency-check
           mkdir -p reports/semgrep
           mkdir -p reports/gitleaks
           mkdir -p reports/trivy
 
       # ------------------------------------------------------------
-      # 6. Semgrep SAST
+      # 6. OWASP Dependency-Check SCA
+      # ------------------------------------------------------------
+      - name: Run OWASP Dependency-Check
+        run: |
+          ./mvnw --batch-mode \
+            org.owasp:dependency-check-maven:check \
+            -Dformat=JSON \
+            -Dodc.outputDirectory=reports/dependency-check \
+            -DfailBuildOnCVSS=8 \
+            -DfailOnError=true
+
+      # ------------------------------------------------------------
+      # 7. Semgrep SAST
       # ------------------------------------------------------------
       - name: Run Semgrep SAST
         run: |
@@ -81,20 +100,20 @@ jobs:
             /src
 
       # ------------------------------------------------------------
-      # 7. Gitleaks secret scanning
+      # 8. Gitleaks secret scanning
       # ------------------------------------------------------------
       - name: Run Gitleaks
         run: |
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
-            git  /repo \
+            git /repo \
             --report-path=/repo/reports/gitleaks/gitleaks.json \
             --report-format=json \
             --no-banner
 
       # ------------------------------------------------------------
-      # 8. Build hardened Docker image
+      # 9. Build hardened Docker image
       # ------------------------------------------------------------
       - name: Build Docker image
         run: |
@@ -103,7 +122,7 @@ jobs:
             .
 
       # ------------------------------------------------------------
-      # 9. Scan Docker image with Trivy
+      # 10. Scan Docker image with Trivy
       # ------------------------------------------------------------
       - name: Run Trivy vulnerability scan
         run: |
@@ -118,27 +137,72 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
       # ------------------------------------------------------------
-      # 10. Display vulnerability summary
+      # 11. Display vulnerability summary
       # ------------------------------------------------------------
-      - name: Display Trivy summary
+      - name: Display security summary
+        if: always()
         run: |
-          TOTAL=$(jq '[.Results[]?.Vulnerabilities[]?] | length' \
-            reports/trivy/trivy-image.json)
+          echo "========================================"
+          echo "DevSecOps Security Scan Summary"
+          echo "========================================"
 
-          HIGH_CRITICAL=$(jq \
-            '[.Results[]?.Vulnerabilities[]?
-              | select(
-                  .Severity == "HIGH" or
-                  .Severity == "CRITICAL"
-                )
-            ] | length' \
-            reports/trivy/trivy-image.json)
+          if [ -f reports/dependency-check/dependency-check-report.json ]; then
+            DEPENDENCY_VULNS=$(jq \
+              '[.dependencies[]?
+                | select(.vulnerabilities != null)
+                | .vulnerabilities[]
+              ] | length' \
+              reports/dependency-check/dependency-check-report.json)
 
-          echo "Total vulnerabilities: $TOTAL"
-          echo "HIGH/CRITICAL vulnerabilities: $HIGH_CRITICAL"
+            echo "Dependency vulnerabilities: $DEPENDENCY_VULNS"
+          else
+            echo "Dependency-Check report not generated"
+          fi
+
+          if [ -f reports/semgrep/semgrep.json ]; then
+            SEMGREP_FINDINGS=$(jq \
+              '.results | length' \
+              reports/semgrep/semgrep.json)
+
+            echo "Semgrep findings: $SEMGREP_FINDINGS"
+          else
+            echo "Semgrep report not generated"
+          fi
+
+          if [ -f reports/gitleaks/gitleaks.json ]; then
+            GITLEAKS_FINDINGS=$(jq \
+              'length' \
+              reports/gitleaks/gitleaks.json)
+
+            echo "Gitleaks findings: $GITLEAKS_FINDINGS"
+          else
+            echo "Gitleaks report not generated"
+          fi
+
+          if [ -f reports/trivy/trivy-image.json ]; then
+            TOTAL=$(jq \
+              '[.Results[]?.Vulnerabilities[]?] | length' \
+              reports/trivy/trivy-image.json)
+
+            HIGH_CRITICAL=$(jq \
+              '[.Results[]?.Vulnerabilities[]?
+                | select(
+                    .Severity == "HIGH" or
+                    .Severity == "CRITICAL"
+                  )
+              ] | length' \
+              reports/trivy/trivy-image.json)
+
+            echo "Total container vulnerabilities: $TOTAL"
+            echo "HIGH/CRITICAL container vulnerabilities: $HIGH_CRITICAL"
+          else
+            echo "Trivy report not generated"
+          fi
+
+          echo "========================================"
 
       # ------------------------------------------------------------
-      # 11. Enforce container security gate
+      # 12. Enforce container security gate
       # ------------------------------------------------------------
       - name: Enforce Trivy security gate
         run: |
@@ -161,7 +225,7 @@ jobs:
           echo "No HIGH or CRITICAL vulnerabilities found."
 
       # ------------------------------------------------------------
-      # 12. Upload application JAR
+      # 13. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
         uses: actions/upload-artifact@v4
@@ -172,7 +236,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 13. Upload security reports
+      # 14. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports
@@ -181,6 +245,7 @@ jobs:
         with:
           name: security-reports
           path: |
+            reports/dependency-check/*.json
             reports/semgrep/*.json
             reports/gitleaks/*.json
             reports/trivy/*.json

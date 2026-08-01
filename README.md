@@ -2,7 +2,7 @@
 
 A hands-on DevSecOps lab built around a Spring Boot payment REST API.
 
-The project demonstrates how application security controls, automated testing, static analysis, secret scanning, dependency analysis, container hardening, vulnerability scanning, and CI security gates can be integrated into a software development lifecycle.
+The project demonstrates how application security controls, automated testing, static analysis, software composition analysis, secret scanning, container hardening, vulnerability scanning, dynamic application security testing, and CI security gates can be integrated into the software development lifecycle.
 
 ---
 
@@ -10,9 +10,33 @@ The project demonstrates how application security controls, automated testing, s
 
 This project contains a secured payment REST API developed with Spring Boot and Java 21.
 
-The application supports payment creation, retrieval, update, and deletion while applying authentication, role-based authorization, input validation, structured error handling, automated tests, and container security controls.
+The application supports payment creation, retrieval, update, and deletion while applying authentication, role-based authorization, input validation, structured error handling, automated testing, and container security controls.
 
-The project also demonstrates a DevSecOps workflow that automatically builds, tests, scans, and validates the application before it can be considered ready for deployment.
+The project also implements a DevSecOps workflow that automatically builds, tests, scans, packages, starts, and validates the application using GitHub Actions.
+
+The lab demonstrates the security feedback cycle:
+
+```text
+Build
+  |
+  v
+Test
+  |
+  v
+Scan
+  |
+  v
+Identify Risk
+  |
+  v
+Remediate
+  |
+  v
+Rebuild
+  |
+  v
+Verify
+```
 
 ---
 
@@ -24,14 +48,16 @@ The main objectives of this lab are to:
 - Apply secure coding practices.
 - Implement authentication and role-based access control.
 - Manage application credentials through environment variables.
-- Run automated application tests.
-- perform Static Application Security Testing.
+- Run automated application and authorization tests.
+- Perform Static Application Security Testing.
 - Detect exposed secrets in source code and Git history.
-- Analyze software dependencies for known vulnerabilities.
+- Analyze third-party dependencies for known vulnerabilities.
 - Build and harden a Docker container.
-- Scan the container image for vulnerabilities.
+- Scan the final container image for vulnerabilities.
+- Start and validate the application inside the CI pipeline.
+- Perform baseline Dynamic Application Security Testing.
 - Automate security checks using GitHub Actions.
-- Enforce security gates before deployment.
+- Enforce security gates before application artifacts are accepted.
 
 ---
 
@@ -48,6 +74,7 @@ The application provides a payment management API with the following capabilitie
 - Return structured API error responses.
 - Store development data in an H2 database.
 - Expose an application health endpoint.
+- Restrict sensitive operations based on user roles.
 
 ---
 
@@ -57,9 +84,11 @@ The application provides a payment management API with the following capabilitie
 |---|---|
 | Programming language | Java 21 |
 | Application framework | Spring Boot |
-| Build tool | Maven |
+| Embedded server | Apache Tomcat |
+| Build tool | Maven Wrapper |
 | Database | H2 |
 | Authentication | HTTP Basic |
+| Authorization | Spring Security RBAC |
 | Password hashing | BCrypt |
 | Testing | JUnit and MockMvc |
 | Containerization | Docker |
@@ -67,9 +96,9 @@ The application provides a payment management API with the following capabilitie
 | CI platform | GitHub Actions |
 | SAST | Semgrep |
 | Secret scanning | Gitleaks |
-| Dependency scanning | OWASP Dependency-Check |
+| Software composition analysis | OWASP Dependency-Check |
 | Container scanning | Trivy |
-| DAST | OWASP ZAP planned |
+| DAST | OWASP ZAP Baseline Scan |
 
 ---
 
@@ -96,3 +125,980 @@ Payment Repository
   |
   v
 H2 Database
+```
+
+The application is packaged as a Spring Boot JAR and deployed inside a hardened Docker container.
+
+```text
+Source Code
+    |
+    v
+Maven Build and Tests
+    |
+    v
+Dependency and Source Scanning
+    |
+    v
+Secret Scanning
+    |
+    v
+Docker Image Build
+    |
+    v
+Container Vulnerability Scan
+    |
+    v
+Start Application Container
+    |
+    v
+OWASP ZAP Baseline DAST
+    |
+    v
+Security Gates and Reports
+```
+
+---
+
+## Security Controls
+
+### Authentication
+
+The API uses HTTP Basic authentication.
+
+Two users are configured:
+
+| Username | Role |
+|---|---|
+| `merchant-user` | USER |
+| `admin-user` | ADMIN |
+
+Passwords are supplied through environment variables and are not stored directly in the source code.
+
+### Authorization
+
+Authenticated users can access standard payment operations.
+
+Deleting a payment requires the `ADMIN` role.
+
+The authorization model is:
+
+```text
+USER
+  ├── Retrieve payments
+  ├── Create payments
+  └── Update payments
+
+ADMIN
+  ├── Retrieve payments
+  ├── Create payments
+  ├── Update payments
+  └── Delete payments
+```
+
+### Password Handling
+
+Passwords are processed using BCrypt.
+
+The application does not contain hardcoded fallback passwords. Required credentials must be supplied through environment variables.
+
+### Environment-Based Credentials
+
+The application requires:
+
+```bash
+MERCHANT_USER_PASSWORD
+ADMIN_USER_PASSWORD
+```
+
+These values are provided separately for local development, Docker execution, automated testing, and CI runs.
+
+Real credentials must not be committed to Git.
+
+### Input Validation
+
+Incoming payment requests are validated before business logic is executed.
+
+Invalid requests return structured JSON validation responses rather than uncontrolled framework exceptions.
+
+### Error Handling
+
+The application uses centralized exception handling to provide:
+
+- Consistent JSON responses.
+- Appropriate HTTP status codes.
+- Predictable client behavior.
+- Reduced accidental exception-detail exposure.
+
+### Health Endpoint
+
+The following endpoint is publicly accessible:
+
+```text
+GET /actuator/health
+```
+
+This allows infrastructure, containers, and the CI pipeline to verify whether the application is available.
+
+Business API endpoints require authentication.
+
+### CSRF
+
+CSRF protection is disabled because the application is implemented as a REST API using HTTP Basic authentication rather than browser session-based form authentication.
+
+This configuration is specific to the lab architecture and should be reassessed for applications using browser sessions or cookies for authentication.
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Required access | Description |
+|---|---|---|---|
+| GET | `/api/payments` | USER or ADMIN | Retrieve all payments |
+| GET | `/api/payments/{id}` | USER or ADMIN | Retrieve a payment by ID |
+| POST | `/api/payments` | USER or ADMIN | Create a payment |
+| PUT | `/api/payments/{id}` | USER or ADMIN | Update a payment |
+| DELETE | `/api/payments/{id}` | ADMIN | Delete a payment |
+| GET | `/actuator/health` | Public | Application health check |
+
+---
+
+## Prerequisites
+
+Install the following tools:
+
+- Java 21
+- Git
+- Docker
+- Docker Compose
+
+The project includes the Maven Wrapper, so a separate Maven installation is not required.
+
+Verify the installed tools:
+
+```bash
+java -version
+git --version
+docker --version
+docker compose version
+```
+
+---
+
+## Running the Application Locally
+
+Set the required environment variables:
+
+```bash
+export MERCHANT_USER_PASSWORD='<MERCHANT_PASSWORD>'
+export ADMIN_USER_PASSWORD='<ADMIN_PASSWORD>'
+```
+
+Run the application:
+
+```bash
+./mvnw spring-boot:run
+```
+
+Check the health endpoint:
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+Retrieve payments as the merchant user:
+
+```bash
+curl -u merchant-user:<MERCHANT_PASSWORD> \
+  http://localhost:8080/api/payments
+```
+
+Retrieve payments as the administrator:
+
+```bash
+curl -u admin-user:<ADMIN_PASSWORD> \
+  http://localhost:8080/api/payments
+```
+
+---
+
+## Running Tests
+
+Set test credentials:
+
+```bash
+export MERCHANT_USER_PASSWORD='<MERCHANT_PASSWORD>'
+export ADMIN_USER_PASSWORD='<ADMIN_PASSWORD>'
+```
+
+Run the automated tests:
+
+```bash
+./mvnw clean test
+```
+
+The test suite validates areas including:
+
+- Public health endpoint access.
+- Authentication requirements.
+- Authorized USER access.
+- Authorized ADMIN access.
+- Payment retrieval.
+- Payment creation.
+- Payment updates.
+- Payment deletion restrictions.
+- Request validation.
+- Role-based authorization.
+
+---
+
+## Building the Application
+
+Build the Spring Boot JAR:
+
+```bash
+./mvnw clean package
+```
+
+The generated artifact is placed under:
+
+```text
+target/
+```
+
+---
+
+## Docker Image
+
+The final image uses an Alpine-based Java runtime.
+
+The Dockerfile applies the following security controls:
+
+- Minimal Java Runtime Environment.
+- Alpine Linux base image.
+- Package upgrades during the image build.
+- Dedicated application group.
+- Dedicated non-root user.
+- Explicit application working directory.
+- Controlled JAR ownership.
+- Application execution as an unprivileged user.
+- No compiler or development tooling in the runtime image.
+
+Build the image:
+
+```bash
+docker build -t devsecops-lab:local .
+```
+
+Run the image:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -e MERCHANT_USER_PASSWORD='<MERCHANT_PASSWORD>' \
+  -e ADMIN_USER_PASSWORD='<ADMIN_PASSWORD>' \
+  devsecops-lab:local
+```
+
+---
+
+## Docker Compose
+
+Start the application:
+
+```bash
+MERCHANT_USER_PASSWORD='<MERCHANT_PASSWORD>' \
+ADMIN_USER_PASSWORD='<ADMIN_PASSWORD>' \
+docker compose up -d
+```
+
+Check the service:
+
+```bash
+docker compose ps
+```
+
+View logs:
+
+```bash
+docker compose logs -f
+```
+
+Stop the application:
+
+```bash
+docker compose down
+```
+
+When Docker Compose is executed with `sudo`, exported shell variables may not be preserved.
+
+Use:
+
+```bash
+sudo MERCHANT_USER_PASSWORD='<MERCHANT_PASSWORD>' \
+     ADMIN_USER_PASSWORD='<ADMIN_PASSWORD>' \
+     docker compose up -d
+```
+
+---
+
+## DevSecOps Pipeline
+
+The GitHub Actions workflow is located at:
+
+```text
+.github/workflows/devsecops.yml
+```
+
+The pipeline is triggered by:
+
+- Pushes to `main`.
+- Pull requests targeting `main`.
+- Manual workflow execution.
+
+The pipeline performs:
+
+```text
+Checkout Repository
+        |
+        v
+Set Up Java 21
+        |
+        v
+Run Maven Tests
+        |
+        v
+Build Spring Boot JAR
+        |
+        v
+OWASP Dependency-Check
+        |
+        v
+Semgrep SAST
+        |
+        v
+Gitleaks Secret Scan
+        |
+        v
+Build Hardened Docker Image
+        |
+        v
+Trivy Container Scan
+        |
+        v
+Enforce Container Security Gate
+        |
+        v
+Start Application Container
+        |
+        v
+Verify Health Endpoint
+        |
+        v
+OWASP ZAP Baseline DAST
+        |
+        v
+Upload JAR and Security Reports
+```
+
+---
+
+## Security Testing
+
+### Semgrep SAST
+
+Semgrep is used for Static Application Security Testing.
+
+It analyzes source code, configuration files, shell commands, YAML files, and the Dockerfile for insecure patterns.
+
+Example scan:
+
+```bash
+docker run --rm \
+  -v "$PWD:/src" \
+  semgrep/semgrep:latest \
+  semgrep scan \
+  --config auto \
+  --json \
+  --output /src/reports/semgrep/semgrep.json \
+  /src
+```
+
+An initial Semgrep scan identified that the Docker container did not explicitly configure a non-root user.
+
+The issue was remediated by:
+
+- Creating `appgroup`.
+- Creating `appuser`.
+- Assigning ownership of the application JAR.
+- Adding `USER appuser` to the Dockerfile.
+
+The follow-up scan confirmed that the missing-user issue had been resolved.
+
+### Gitleaks Secret Scanning
+
+Gitleaks scans both the working repository and Git history for exposed secrets.
+
+It searches for patterns associated with:
+
+- Passwords.
+- API keys.
+- Access tokens.
+- Cloud credentials.
+- Private keys.
+- Database credentials.
+- Service credentials.
+
+Example scan:
+
+```bash
+docker run --rm \
+  -v "$PWD:/repo" \
+  ghcr.io/gitleaks/gitleaks:latest \
+  git /repo \
+  --report-path=/repo/reports/gitleaks/gitleaks.json \
+  --report-format=json \
+  --no-banner
+```
+
+The completed scan did not identify committed secrets.
+
+Application passwords remain externalized through environment variables.
+
+### OWASP Dependency-Check
+
+OWASP Dependency-Check performs Software Composition Analysis.
+
+It analyzes third-party application dependencies and attempts to identify known vulnerabilities associated with those components.
+
+The CI pipeline runs:
+
+```bash
+./mvnw --batch-mode \
+  org.owasp:dependency-check-maven:check \
+  -Dformat=JSON \
+  -Dodc.outputDirectory=reports/dependency-check \
+  -DfailBuildOnCVSS=8 \
+  -DfailOnError=true
+```
+
+The dependency security gate fails when a detected dependency vulnerability has a CVSS score of 8.0 or higher.
+
+#### Dependency Vulnerability Detected
+
+During the first GitHub Actions execution, Dependency-Check detected multiple critical vulnerabilities in:
+
+```text
+tomcat-embed-core 11.0.22
+```
+
+The findings included CVEs with a CVSS score of 9.1.
+
+Because the configured security threshold was 8.0, the pipeline correctly failed.
+
+#### Remediation
+
+The embedded Tomcat version was upgraded to a patched release through the Maven configuration.
+
+After the upgrade:
+
+- Maven tests passed.
+- The application built successfully.
+- OWASP Dependency-Check passed.
+- The GitHub Actions pipeline returned to a green state.
+
+This demonstrates that the dependency security gate is actively enforcing vulnerability requirements rather than only generating informational reports.
+
+### Trivy Container Scanning
+
+Trivy scans the final Docker image for vulnerabilities in:
+
+- Operating system packages.
+- Java application dependencies.
+- Installed runtime components.
+- Known CVEs.
+
+Example scan:
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/reports/trivy:/reports" \
+  aquasec/trivy:0.72.0 \
+  image \
+  --scanners vuln \
+  --format json \
+  --output /reports/trivy-image.json \
+  devsecops-lab:local
+```
+
+#### Initial Ubuntu-Based Image
+
+The first Java runtime image was based on Ubuntu and contained multiple HIGH-severity vulnerabilities.
+
+#### Alpine Migration
+
+The runtime image was changed to an Alpine-based Java image.
+
+The first Alpine scan still detected HIGH-severity vulnerabilities in system packages.
+
+#### Package Upgrade Remediation
+
+The Dockerfile was updated to include:
+
+```dockerfile
+RUN apk upgrade --no-cache
+```
+
+The image was rebuilt and rescanned.
+
+The final hardened image returned:
+
+```text
+0 HIGH vulnerabilities
+0 CRITICAL vulnerabilities
+```
+
+The CI pipeline separately parses the Trivy JSON report and fails when HIGH or CRITICAL vulnerabilities are detected.
+
+### OWASP ZAP Baseline DAST
+
+OWASP ZAP is used for baseline Dynamic Application Security Testing.
+
+The CI pipeline:
+
+1. Builds the Docker image.
+2. Starts the application container.
+3. Binds the application to the GitHub runner loopback interface.
+4. Waits for the health endpoint to become available.
+5. Runs an OWASP ZAP baseline scan.
+6. Generates JSON, HTML, and Markdown reports.
+7. Uploads the reports as GitHub Actions artifacts.
+8. Stops and removes the application container.
+
+The initial ZAP scan targets:
+
+```text
+http://127.0.0.1:8080/actuator/health
+```
+
+The baseline scan performs passive analysis and validates that ZAP is correctly integrated into the pipeline.
+
+The initial OWASP ZAP baseline scan produced:
+
+- High: 0
+- Medium: 1
+- Low: 2
+- Informational: 2
+- False positives: 0
+
+The alerts were:
+
+| Alert | Risk | Instances |
+|---|---:|---:|
+| Weak Authentication Method | Medium | 4 |
+| Cookie without SameSite Attribute | Low | 4 |
+| Cross-Origin-Resource-Policy Header Missing or Invalid | Low | 1 |
+| Non-Storable Content | Informational | 5 |
+| Session Management Response Identified | Informational | 3 |
+
+The Medium finding was `Weak Authentication Method`, caused by the intentional use of HTTP Basic authentication in the educational lab.
+
+The finding is not classified as a false positive. It is documented as an accepted lab limitation.
+
+The current baseline scan primarily validates the public health endpoint. Authenticated scanning of the protected payment API remains a planned enhancement.
+
+---
+
+## Security Gates
+
+The project currently applies security gates at multiple stages.
+
+### Automated Test Gate
+
+The pipeline stops when Maven or MockMvc tests fail.
+
+### Dependency Vulnerability Gate
+
+OWASP Dependency-Check fails the pipeline when a dependency has a CVSS score of 8.0 or higher.
+
+### Secret Scanning Gate
+
+Gitleaks returns a failure when exposed credentials or secrets are identified.
+
+### Container Vulnerability Gate
+
+The Trivy report is parsed, and the workflow fails when HIGH or CRITICAL container vulnerabilities are present.
+
+### DAST Handling
+
+The ZAP baseline scan currently generates and uploads findings without treating warnings as a pipeline failure.
+
+This allows the lab to retain and analyze accepted findings while authenticated API scanning and DAST policy rules are developed.
+
+---
+
+## Security Reports
+
+Security reports are generated under:
+
+```text
+reports/
+├── dependency-check/
+├── semgrep/
+├── gitleaks/
+├── trivy/
+└── zap/
+```
+
+The GitHub Actions workflow uploads:
+
+```text
+dependency-check-report.json
+semgrep.json
+gitleaks.json
+trivy-image.json
+zap-report.json
+zap-report.html
+zap-report.md
+```
+
+The reports are available from the completed workflow run under the GitHub Actions **Artifacts** section.
+
+Security reports should be reviewed before being published because they may contain:
+
+- Local paths.
+- Dependency information.
+- Application metadata.
+- Scanner configuration.
+- Repository information.
+- Runtime headers.
+- Environment details.
+
+---
+
+## Reviewing GitHub Actions Artifacts
+
+Open:
+
+```text
+GitHub Repository
+→ Actions
+→ DevSecOps Pipeline
+→ Completed Workflow Run
+→ Artifacts
+→ security-reports
+```
+
+Download and extract the ZIP file.
+
+Example:
+
+```bash
+unzip security-reports.zip -d security-reports
+```
+
+List the reports:
+
+```bash
+find security-reports -type f
+```
+
+Open the ZAP HTML report:
+
+```bash
+find security-reports -name "zap-report.html"
+```
+
+Then:
+
+```bash
+xdg-open security-reports/zap/zap-report.html
+```
+
+The exact path may vary depending on the artifact directory structure.
+
+---
+
+## Local GitHub Actions Testing
+
+The workflow can be partially tested locally using `act`.
+
+List available jobs:
+
+```bash
+act -l
+```
+
+Run the workflow:
+
+```bash
+sudo act push \
+  -j build-test-security \
+  -P ubuntu-latest=catthehacker/ubuntu:act-latest
+```
+
+The local runner successfully validated stages including:
+
+- Java setup.
+- Maven Wrapper execution.
+- Maven tests.
+- Application packaging.
+- Semgrep.
+- Gitleaks.
+- Docker image creation.
+
+The local run was cancelled while Trivy was downloading vulnerability databases because the system ran out of disk space.
+
+This was a local resource limitation rather than a project security failure.
+
+The complete workflow was subsequently executed successfully using a GitHub-hosted runner.
+
+---
+
+## Findings and Remediation Summary
+
+| Finding | Tool | Severity | Remediation or status |
+|---|---|---:|---|
+| Container did not explicitly run as non-root | Semgrep | Hardening issue | Added dedicated `appuser` and `USER appuser` |
+| Ubuntu runtime contained vulnerable components | Trivy | HIGH | Replaced the runtime with Alpine |
+| Alpine system packages required security updates | Trivy | HIGH | Added `apk upgrade --no-cache` |
+| Embedded Tomcat contained critical vulnerabilities | Dependency-Check | CRITICAL | Upgraded embedded Tomcat |
+| Password fallback values weakened secret handling | Code review | Configuration risk | Required environment-only passwords |
+| Potential committed credentials | Gitleaks | None found | Continued environment-based secret handling |
+| Weak Authentication Method | OWASP ZAP | Medium | Accepted educational-lab limitation |
+| Cookie without SameSite Attribute | OWASP ZAP | Low | Documented for future hardening |
+| Cross-Origin-Resource-Policy header missing | OWASP ZAP | Low | Documented for future hardening |
+
+---
+
+## Project Structure
+
+```text
+devsecops-lab/
+├── .github/
+│   └── workflows/
+│       └── devsecops.yml
+├── reports/
+│   ├── dependency-check/
+│   ├── semgrep/
+│   ├── gitleaks/
+│   ├── trivy/
+│   └── zap/
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   └── resources/
+│   └── test/
+├── Dockerfile
+├── docker-compose.yml
+├── pom.xml
+├── mvnw
+├── mvnw.cmd
+├── README.md
+└── .gitignore
+```
+
+---
+
+## Current Project Status
+
+### Completed
+
+- Spring Boot payment REST API.
+- CRUD operations.
+- Input validation.
+- Structured exception handling.
+- H2 database.
+- HTTP Basic authentication.
+- USER and ADMIN roles.
+- BCrypt password processing.
+- Environment-based credentials.
+- Automated MockMvc tests.
+- Hardened non-root Docker image.
+- Docker Compose configuration.
+- Semgrep SAST.
+- Gitleaks secret scanning.
+- Automated OWASP Dependency-Check.
+- Dependency CVSS security gate.
+- Tomcat vulnerability remediation.
+- Trivy container scanning.
+- Trivy HIGH and CRITICAL vulnerability gate.
+- Application startup inside GitHub Actions.
+- Application health validation.
+- OWASP ZAP baseline DAST.
+- ZAP JSON, HTML, and Markdown reports.
+- GitHub Actions artifact uploads.
+- Successful end-to-end GitHub Actions execution.
+
+### Pending
+
+- Authenticated OWASP ZAP scanning of the protected payment API.
+- A formal ZAP security gate for unaccepted findings.
+- Remediation or policy handling for low-risk ZAP findings.
+- Optional HTTPS implementation.
+- Optional replacement of HTTP Basic authentication.
+- Optional container registry publishing.
+- Optional automated deployment stage.
+- Optional Software Bill of Materials generation.
+- Optional image signing and provenance.
+- Optional production database integration.
+
+---
+
+## Security Limitations
+
+This repository is an educational DevSecOps security lab.
+
+It is not a production payment platform.
+
+The application does not implement:
+
+- Real financial transactions.
+- Payment card processing.
+- PCI DSS compliance.
+- Production identity management.
+- Production secrets management.
+- High availability.
+- Full audit logging.
+- Production database security controls.
+- TLS termination.
+- Complete authenticated DAST coverage.
+- Production infrastructure monitoring.
+- Disaster recovery.
+
+### HTTP Basic Authentication
+
+The lab currently uses HTTP Basic authentication.
+
+OWASP ZAP reports this as a Medium-risk `Weak Authentication Method` finding because Basic authentication transmits reusable credentials with each request.
+
+During CI testing, the application is bound only to the GitHub runner's loopback interface. However, a production deployment would require HTTPS and should preferably replace HTTP Basic with OAuth 2.0, OpenID Connect, or short-lived token-based authentication.
+
+HTTPS was deliberately not introduced into the current lab scope because doing so would require certificate generation, trust configuration, keystore or PEM management, secret handling, and certificate lifecycle management.
+
+This finding is currently treated as an accepted lab limitation rather than a false positive.
+
+### Baseline DAST Coverage
+
+The current OWASP ZAP baseline scan targets the public health endpoint.
+
+This confirms that the following workflow operates successfully:
+
+```text
+Build image
+    |
+    v
+Start application
+    |
+    v
+Verify health
+    |
+    v
+Run ZAP
+    |
+    v
+Generate reports
+    |
+    v
+Upload artifacts
+```
+
+However, scanning only the health endpoint does not provide complete coverage of the authenticated payment API.
+
+Authenticated API scanning remains required to evaluate protected business endpoints.
+
+### Self-Contained Development Database
+
+The application uses H2 for development and lab testing.
+
+H2 is not intended to represent the access controls, encryption, backup, monitoring, and resilience requirements of a production payment database.
+
+### Scanner Limitations
+
+A passing security scan does not prove that an application is free from vulnerabilities.
+
+Security scanner results depend on:
+
+- Scanner rule coverage.
+- Vulnerability database freshness.
+- Tool versions.
+- Configuration.
+- Authentication coverage.
+- Runtime execution paths.
+- Test data.
+- Suppression rules.
+- Network accessibility.
+- False-positive and false-negative behavior.
+
+---
+
+## Future Improvements
+
+Potential future enhancements include:
+
+- Add authenticated ZAP scanning for `/api/payments`.
+- Add an OpenAPI specification for API-focused scanning.
+- Add a formal DAST security gate.
+- Add the SameSite attribute to relevant cookies.
+- Add the Cross-Origin-Resource-Policy header.
+- Replace HTTP Basic with OAuth 2.0 or OpenID Connect.
+- Add HTTPS and certificate lifecycle management.
+- Generate an SBOM using Trivy or Syft.
+- Sign container images with Cosign.
+- Generate supply-chain provenance.
+- Publish images to a private container registry.
+- Add branch-protection requirements.
+- Require security checks before pull-request merging.
+- Add code-coverage reporting.
+- Replace H2 with PostgreSQL.
+- Add centralized application logging.
+- Add runtime monitoring.
+- Add Kubernetes manifests.
+- Add policy-as-code scanning.
+- Add infrastructure-as-code scanning.
+- Pin GitHub Actions and scanner images to immutable versions or digests.
+
+---
+
+## Skills Demonstrated
+
+This project demonstrates practical experience with:
+
+- Java 21.
+- Spring Boot.
+- REST API development.
+- Spring Security.
+- Role-based access control.
+- HTTP Basic authentication.
+- BCrypt.
+- Request validation.
+- Structured exception handling.
+- JUnit.
+- MockMvc.
+- Maven Wrapper.
+- Git.
+- GitHub.
+- GitHub Actions.
+- Docker.
+- Docker Compose.
+- Container hardening.
+- Semgrep.
+- Gitleaks.
+- OWASP Dependency-Check.
+- Trivy.
+- OWASP ZAP.
+- CI security gates.
+- Security report generation.
+- Vulnerability remediation.
+- DAST finding analysis.
+- Accepted-risk documentation.
+
+---
+
+## Disclaimer
+
+This project is intended for authorized education, testing, and DevSecOps practice.
+
+Do not use real payment data, real customer information, production passwords, API keys, or other sensitive information with this application.
+
+Security findings should be reviewed in context. Scanner output should not be treated as proof of security or as a substitute for architecture review, threat modeling, manual testing, code review, penetration testing, and operational security controls.

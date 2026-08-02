@@ -337,7 +337,45 @@ jobs:
           echo "Generated authenticated ZAP reports:"
           ls -la reports/zap-api
       # ------------------------------------------------------------
-      # 19. Run OWASP ZAP baseline DAST
+      # 19. Enforce authenticated ZAP security gate
+      # ------------------------------------------------------------
+      - name: Enforce authenticated ZAP security gate
+        run: |
+          REPORT="reports/zap-api/zap-api-report.json"
+
+          if [ ! -f "$REPORT" ]; then
+            echo "Authenticated ZAP report was not generated."
+            exit 1
+          fi
+
+          UNACCEPTED_HIGH_FINDINGS=$(jq '
+            [
+              .site[].alerts[]
+              | select(.riskcode == "3")
+              | select(.pluginid != "10105")
+            ]
+            | length
+          ' "$REPORT")
+
+          echo "Unaccepted High-risk ZAP findings: $UNACCEPTED_HIGH_FINDINGS"
+
+          if [ "$UNACCEPTED_HIGH_FINDINGS" -gt 0 ]; then
+            echo "Authenticated ZAP security gate failed."
+
+            jq -r '
+              .site[].alerts[]
+              | select(.riskcode == "3")
+              | select(.pluginid != "10105")
+              | "- \(.alert) [Rule \(.pluginid)]"
+            ' "$REPORT"
+
+            exit 1
+          fi
+
+          echo "Authenticated ZAP security gate passed."
+          echo "Rule 10105 is accepted as the documented HTTP Basic limitation."
+      # ------------------------------------------------------------
+      # 20. Run OWASP ZAP baseline DAST
       # ------------------------------------------------------------
       - name: Run OWASP ZAP baseline scan
         run: |
@@ -359,7 +397,7 @@ jobs:
           ls -la reports/zap
 
       # ------------------------------------------------------------
-      # 20. Stop DAST application container
+      # 21. Stop DAST application container
       # ------------------------------------------------------------
       - name: Stop application container
         if: always()
@@ -368,7 +406,7 @@ jobs:
           docker rm -f devsecops-lab-dast || true
 
       # ------------------------------------------------------------
-      # 21. Upload application JAR
+      # 22. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
         if: success()
@@ -380,7 +418,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 22. Upload security reports
+      # 23. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports

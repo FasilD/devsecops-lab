@@ -12,7 +12,7 @@ This project contains a secured payment REST API developed with Spring Boot and 
 
 The application supports payment creation, retrieval, update, and deletion while applying authentication, role-based authorization, input validation, structured error handling, automated testing, and container security controls.
 
-The project also implements a DevSecOps workflow that automatically builds, tests, scans, packages, starts, and validates the application using GitHub Actions.
+The project also implements a DevSecOps workflow that automatically builds, tests, scans, packages, starts, and validates the application using GitHub Actions, including baseline and authenticated OpenAPI-driven DAST.
 
 The lab demonstrates the security feedback cycle:
 
@@ -55,7 +55,7 @@ The main objectives of this lab are to:
 - Build and harden a Docker container.
 - Scan the final container image for vulnerabilities.
 - Start and validate the application inside the CI pipeline.
-- Perform baseline Dynamic Application Security Testing.
+- Perform baseline and authenticated API Dynamic Application Security Testing.
 - Automate security checks using GitHub Actions.
 - Enforce security gates before application artifacts are accepted.
 
@@ -98,7 +98,7 @@ The application provides a payment management API with the following capabilitie
 | Secret scanning | Gitleaks |
 | Software composition analysis | OWASP Dependency-Check |
 | Container scanning | Trivy |
-| DAST | OWASP ZAP Baseline Scan |
+| DAST | OWASP ZAP Baseline and Authenticated API Scans |
 
 ---
 
@@ -154,7 +154,16 @@ Start Application Container
 OWASP ZAP Baseline DAST
     |
     v
-Security Gates and Reports
+OpenAPI Specification Retrieval
+    |
+    v
+Authenticated OWASP ZAP API Scan
+    |
+    v
+Authenticated ZAP Security Gate
+    |
+    v
+Security Reports and Artifacts
 ```
 
 ---
@@ -259,6 +268,7 @@ This configuration is specific to the lab architecture and should be reassessed 
 | PUT | `/api/payments/{id}` | USER or ADMIN | Update a payment |
 | DELETE | `/api/payments/{id}` | ADMIN | Delete a payment |
 | GET | `/actuator/health` | Public | Application health check |
+| GET | `/v3/api-docs` | USER or ADMIN | Generated OpenAPI JSON |
 
 ---
 
@@ -497,6 +507,15 @@ Verify Health Endpoint
 OWASP ZAP Baseline DAST
         |
         v
+Download OpenAPI Specification
+        |
+        v
+Authenticated OWASP ZAP API Scan
+        |
+        v
+Enforce Authenticated ZAP Security Gate
+        |
+        v
 Upload JAR and Security Reports
 ```
 
@@ -582,6 +601,11 @@ The CI pipeline runs:
 ```
 
 The dependency security gate fails when a detected dependency vulnerability has a CVSS score of 8.0 or higher.
+
+The CI workflow supplies an NVD API key through the `NVD_API_KEY` GitHub Actions repository secret. The key is read from an environment variable and is not committed to the repository.
+
+The Dependency-Check data directory is cached between workflow runs to reduce repeated NVD downloads and lower the likelihood of API rate limiting.
+
 
 #### Dependency Vulnerability Detected
 
@@ -705,7 +729,59 @@ The Medium finding was `Weak Authentication Method`, caused by the intentional u
 
 The finding is not classified as a false positive. It is documented as an accepted lab limitation.
 
-The current baseline scan primarily validates the public health endpoint. Authenticated scanning of the protected payment API remains a planned enhancement.
+The baseline scan primarily validates the public health endpoint. The pipeline also performs a separate authenticated API scan against the protected payment endpoints by importing the generated OpenAPI specification.
+
+### Authenticated OWASP ZAP API Scan
+
+The CI pipeline performs an authenticated API security scan after the application becomes healthy.
+
+The authenticated scan:
+
+1. Downloads the generated OpenAPI document from `/v3/api-docs`.
+2. Validates the OpenAPI JSON.
+3. Imports the API definition into OWASP ZAP.
+4. Adds an HTTP Basic authorization header for `merchant-user`.
+5. Actively tests the protected payment endpoints.
+6. Generates JSON, HTML, and Markdown reports.
+7. Applies a dedicated authenticated DAST security gate.
+
+The imported API paths include:
+
+```text
+/api/payments
+/api/payments/merchant/{merchantId}
+/api/payments/{id}
+```
+
+During the first authenticated scan, ZAP triggered a `500 Internal Server Error` on `POST /api/payments`.
+
+The root cause was that the create operation accepted a client-supplied entity ID and passed the request object directly to the JPA repository. Hibernate interpreted the supplied ID as an existing detached entity and produced an optimistic-locking failure.
+
+The remediation forces new payment records to use a server-generated identifier by clearing any client-supplied ID before persistence.
+
+The scan also identified a missing `Cross-Origin-Resource-Policy` response header. The application was updated to return:
+
+```http
+Cross-Origin-Resource-Policy: same-origin
+```
+
+After remediation, the authenticated scan no longer reported:
+
+- Server error responses.
+- Application error disclosure.
+- Debug error-message disclosure.
+- Missing or invalid Cross-Origin-Resource-Policy headers.
+
+The final authenticated scan reported:
+
+| Alert | Risk | Status |
+|---|---:|---|
+| Authentication Credentials Captured | High | Accepted HTTP Basic over HTTP limitation |
+| A Client Error response code was returned by the server | Informational | Expected during active fuzzing |
+| Non-Storable Content | Informational | Expected API behavior |
+
+The active scan passed checks for SQL injection, command injection, cross-site scripting, path traversal, server-side template injection, XML external entity attacks, Spring4Shell, Log4Shell, and other enabled ZAP rules.
+
 
 ---
 
@@ -729,11 +805,22 @@ Gitleaks returns a failure when exposed credentials or secrets are identified.
 
 The Trivy report is parsed, and the workflow fails when HIGH or CRITICAL container vulnerabilities are present.
 
-### DAST Handling
+### Baseline DAST Handling
 
-The ZAP baseline scan currently generates and uploads findings without treating warnings as a pipeline failure.
+The ZAP baseline scan generates and uploads findings without failing the pipeline on warnings. This preserves the baseline results for review while the authenticated API scan provides deeper coverage of protected business endpoints.
 
-This allows the lab to retain and analyze accepted findings while authenticated API scanning and DAST policy rules are developed.
+### Authenticated DAST Gate
+
+The authenticated ZAP report is parsed by the CI workflow.
+
+The gate:
+
+- Fails when an unexpected High-risk authenticated ZAP finding is present.
+- Allows only ZAP rule `10105`, `Authentication Credentials Captured`, as a documented accepted risk.
+- Does not fail on informational findings.
+- Fails when the authenticated ZAP report is missing.
+
+The accepted rule exists because the educational lab intentionally uses HTTP Basic authentication over HTTP on the GitHub runner loopback interface. It is not classified as a false positive.
 
 ---
 
@@ -747,7 +834,9 @@ reports/
 ├── semgrep/
 ├── gitleaks/
 ├── trivy/
-└── zap/
+├── openapi/
+├── zap/
+└── zap-api/
 ```
 
 The GitHub Actions workflow uploads:
@@ -760,6 +849,10 @@ trivy-image.json
 zap-report.json
 zap-report.html
 zap-report.md
+openapi.json
+zap-api-report.json
+zap-api-report.html
+zap-api-report.md
 ```
 
 The reports are available from the completed workflow run under the GitHub Actions **Artifacts** section.
@@ -865,9 +958,12 @@ The complete workflow was subsequently executed successfully using a GitHub-host
 | Embedded Tomcat contained critical vulnerabilities | Dependency-Check | CRITICAL | Upgraded embedded Tomcat |
 | Password fallback values weakened secret handling | Code review | Configuration risk | Required environment-only passwords |
 | Potential committed credentials | Gitleaks | None found | Continued environment-based secret handling |
-| Weak Authentication Method | OWASP ZAP | Medium | Accepted educational-lab limitation |
-| Cookie without SameSite Attribute | OWASP ZAP | Low | Documented for future hardening |
-| Cross-Origin-Resource-Policy header missing | OWASP ZAP | Low | Documented for future hardening |
+| Weak Authentication Method | OWASP ZAP baseline | Medium | Accepted educational-lab limitation |
+| Cookie without SameSite Attribute | OWASP ZAP baseline | Low | Documented for future hardening |
+| Client-controlled payment ID caused server error | Authenticated OWASP ZAP | Low | Cleared client-supplied IDs before JPA persistence |
+| Application and debug error disclosure | Authenticated OWASP ZAP | Low | Eliminated by fixing the underlying server error |
+| Authentication Credentials Captured | Authenticated OWASP ZAP | High | Accepted rule `10105` for HTTP Basic over HTTP in CI |
+| Cross-Origin-Resource-Policy header missing | OWASP ZAP | Low | Added `Cross-Origin-Resource-Policy: same-origin` |
 
 ---
 
@@ -883,7 +979,9 @@ devsecops-lab/
 │   ├── semgrep/
 │   ├── gitleaks/
 │   ├── trivy/
-│   └── zap/
+│   ├── openapi/
+│   ├── zap/
+│   └── zap-api/
 ├── src/
 │   ├── main/
 │   │   ├── java/
@@ -926,15 +1024,19 @@ devsecops-lab/
 - Application startup inside GitHub Actions.
 - Application health validation.
 - OWASP ZAP baseline DAST.
+- OpenAPI document generation.
+- Authenticated OWASP ZAP API scanning.
+- Authenticated ZAP JSON, HTML, and Markdown reports.
+- Remediation of the client-controlled payment ID server error.
+- Cross-Origin-Resource-Policy response-header hardening.
+- Authenticated ZAP High-risk security gate.
+- Documented acceptance of ZAP rule `10105`.
 - ZAP JSON, HTML, and Markdown reports.
 - GitHub Actions artifact uploads.
 - Successful end-to-end GitHub Actions execution.
 
 ### Pending
 
-- Authenticated OWASP ZAP scanning of the protected payment API.
-- A formal ZAP security gate for unaccepted findings.
-- Remediation or policy handling for low-risk ZAP findings.
 - Optional HTTPS implementation.
 - Optional replacement of HTTP Basic authentication.
 - Optional container registry publishing.
@@ -962,7 +1064,7 @@ The application does not implement:
 - Full audit logging.
 - Production database security controls.
 - TLS termination.
-- Complete authenticated DAST coverage.
+- Production-grade authenticated DAST coverage.
 - Production infrastructure monitoring.
 - Disaster recovery.
 
@@ -978,9 +1080,9 @@ HTTPS was deliberately not introduced into the current lab scope because doing s
 
 This finding is currently treated as an accepted lab limitation rather than a false positive.
 
-### Baseline DAST Coverage
+### DAST Coverage
 
-The current OWASP ZAP baseline scan targets the public health endpoint.
+The OWASP ZAP baseline scan targets the public health endpoint.
 
 This confirms that the following workflow operates successfully:
 
@@ -1003,9 +1105,9 @@ Generate reports
 Upload artifacts
 ```
 
-However, scanning only the health endpoint does not provide complete coverage of the authenticated payment API.
+The pipeline also performs an authenticated OpenAPI-driven active scan against the protected payment endpoints.
 
-Authenticated API scanning remains required to evaluate protected business endpoints.
+This materially improves runtime coverage, but it does not represent complete production-grade DAST because the lab uses a single authenticated USER context, synthetic data, an H2 database, and a limited CI runtime environment.
 
 ### Self-Contained Development Database
 
@@ -1036,11 +1138,7 @@ Security scanner results depend on:
 
 Potential future enhancements include:
 
-- Add authenticated ZAP scanning for `/api/payments`.
-- Add an OpenAPI specification for API-focused scanning.
-- Add a formal DAST security gate.
 - Add the SameSite attribute to relevant cookies.
-- Add the Cross-Origin-Resource-Policy header.
 - Replace HTTP Basic with OAuth 2.0 or OpenID Connect.
 - Add HTTPS and certificate lifecycle management.
 - Generate an SBOM using Trivy or Syft.

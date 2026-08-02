@@ -28,7 +28,7 @@ jobs:
       # 1. Checkout source code
       # ------------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -46,25 +46,34 @@ jobs:
         run: chmod +x mvnw
 
       # ------------------------------------------------------------
-      # 3. Run automated tests
+      # 3. Generate temporary CI credentials
+      # ------------------------------------------------------------
+      - name: Generate temporary CI credentials
+        shell: bash
+        run: |
+          MERCHANT_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
+          ADMIN_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
+
+          echo "::add-mask::$MERCHANT_PASSWORD"
+          echo "::add-mask::$ADMIN_PASSWORD"
+
+          echo "MERCHANT_USER_PASSWORD=$MERCHANT_PASSWORD" >> "$GITHUB_ENV"
+          echo "ADMIN_USER_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------
+      # 4. Run automated tests
       # ------------------------------------------------------------
       - name: Run Maven tests
-        env:
-          MERCHANT_USER_PASSWORD: TestUserPassword123!
-          ADMIN_USER_PASSWORD: TestAdminPassword123!
         run: ./mvnw --batch-mode clean test
 
       # ------------------------------------------------------------
-      # 4. Build the Spring Boot JAR
+      # 5. Build the Spring Boot JAR
       # ------------------------------------------------------------
       - name: Build application
-        env:
-          MERCHANT_USER_PASSWORD: TestUserPassword123!
-          ADMIN_USER_PASSWORD: TestAdminPassword123!
         run: ./mvnw --batch-mode package -DskipTests
 
       # ------------------------------------------------------------
-      # 5. Prepare security report directories
+      # 6. Prepare security report directories
       # ------------------------------------------------------------
       - name: Create report directories
         run: |
@@ -75,23 +84,42 @@ jobs:
           mkdir -p reports/zap
 
       # ------------------------------------------------------------
-      # 6. OWASP Dependency-Check SCA
+      # 7. Cache OWASP Dependency-Check data
+      # ------------------------------------------------------------
+      - name: Cache Dependency-Check database
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: dependency-check-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            dependency-check-${{ runner.os }}-
+
+      # ------------------------------------------------------------
+      # 8. OWASP Dependency-Check SCA
       # ------------------------------------------------------------
       - name: Run OWASP Dependency-Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "NVD_API_KEY GitHub secret is missing or empty."
+            exit 1
+          fi
+
+          echo "NVD API key is available."
+
           ./mvnw --batch-mode \
-            org.owasp:dependency-check-maven:check \
+            org.owasp:dependency-check-maven:12.2.2:check \
             -Dformat=JSON \
             -Dodc.outputDirectory=reports/dependency-check \
             -DfailBuildOnCVSS=8 \
-            -DfailOnError=true
-            -DnvdApiKey="$NVD_API_KEY" \
-            -DnvdApiDelay=3500
+            -DfailOnError=true \
+            -DnvdApiKeyEnvironmentVariable=NVD_API_KEY \
+            -DnvdApiDelay=6000 \
+            -DnvdMaxRetryCount=20
 
       # ------------------------------------------------------------
-      # 7. Semgrep SAST
+      # 9. Semgrep SAST
       # ------------------------------------------------------------
       - name: Run Semgrep SAST
         run: |
@@ -105,7 +133,7 @@ jobs:
             /src
 
       # ------------------------------------------------------------
-      # 8. Gitleaks secret scanning
+      # 10. Gitleaks secret scanning
       # ------------------------------------------------------------
       - name: Run Gitleaks
         run: |
@@ -118,7 +146,7 @@ jobs:
             --no-banner
 
       # ------------------------------------------------------------
-      # 9. Build hardened Docker image
+      # 11. Build hardened Docker image
       # ------------------------------------------------------------
       - name: Build Docker image
         run: |
@@ -127,7 +155,7 @@ jobs:
             .
 
       # ------------------------------------------------------------
-      # 10. Scan Docker image with Trivy
+      # 12. Scan Docker image with Trivy
       # ------------------------------------------------------------
       - name: Run Trivy vulnerability scan
         run: |
@@ -142,7 +170,7 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
       # ------------------------------------------------------------
-      # 11. Display security scan summary
+      # 13. Display security scan summary
       # ------------------------------------------------------------
       - name: Display security summary
         if: always()
@@ -207,7 +235,7 @@ jobs:
           echo "========================================"
 
       # ------------------------------------------------------------
-      # 12. Enforce Trivy security gate
+      # 14. Enforce Trivy security gate
       # ------------------------------------------------------------
       - name: Enforce Trivy security gate
         run: |
@@ -230,19 +258,19 @@ jobs:
           echo "No HIGH or CRITICAL vulnerabilities found."
 
       # ------------------------------------------------------------
-      # 13. Start application container for DAST
+      # 15. Start application container for DAST
       # ------------------------------------------------------------
       - name: Start application container
         run: |
           docker run -d \
             --name devsecops-lab-dast \
             -p 127.0.0.1:8080:8080 \
-            -e MERCHANT_USER_PASSWORD='TestUserPassword123!' \
-            -e ADMIN_USER_PASSWORD='TestAdminPassword123!' \
+            -e MERCHANT_USER_PASSWORD="$MERCHANT_USER_PASSWORD" \
+            -e ADMIN_USER_PASSWORD="$ADMIN_USER_PASSWORD" \
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
       # ------------------------------------------------------------
-      # 14. Wait for application to become healthy
+      # 16. Wait for application to become healthy
       # ------------------------------------------------------------
       - name: Wait for application
         run: |
@@ -263,7 +291,7 @@ jobs:
           exit 1
 
       # ------------------------------------------------------------
-      # 15. Run OWASP ZAP baseline DAST
+      # 17. Run OWASP ZAP baseline DAST
       # ------------------------------------------------------------
       - name: Run OWASP ZAP baseline scan
         run: |
@@ -285,7 +313,7 @@ jobs:
           ls -la reports/zap
 
       # ------------------------------------------------------------
-      # 16. Stop DAST application container
+      # 18. Stop DAST application container
       # ------------------------------------------------------------
       - name: Stop application container
         if: always()
@@ -294,7 +322,7 @@ jobs:
           docker rm -f devsecops-lab-dast || true
 
       # ------------------------------------------------------------
-      # 17. Upload application JAR
+      # 19. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
         if: success()
@@ -306,7 +334,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 18. Upload security reports
+      # 20. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports

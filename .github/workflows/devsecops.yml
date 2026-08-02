@@ -78,6 +78,8 @@ jobs:
       # 6. OWASP Dependency-Check SCA
       # ------------------------------------------------------------
       - name: Run OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           ./mvnw --batch-mode \
             org.owasp:dependency-check-maven:check \
@@ -85,6 +87,8 @@ jobs:
             -Dodc.outputDirectory=reports/dependency-check \
             -DfailBuildOnCVSS=8 \
             -DfailOnError=true
+            -DnvdApiKey="$NVD_API_KEY" \
+            -DnvdApiDelay=3500
 
       # ------------------------------------------------------------
       # 7. Semgrep SAST
@@ -258,7 +262,7 @@ jobs:
           docker logs devsecops-lab-dast
           exit 1
 
-            # ------------------------------------------------------------
+      # ------------------------------------------------------------
       # 15. Run OWASP ZAP baseline DAST
       # ------------------------------------------------------------
       - name: Run OWASP ZAP baseline scan

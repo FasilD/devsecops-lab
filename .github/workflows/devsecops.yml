@@ -289,9 +289,55 @@ jobs:
           echo "Application did not become healthy."
           docker logs devsecops-lab-dast
           exit 1
-
       # ------------------------------------------------------------
-      # 17. Run OWASP ZAP baseline DAST
+      # 17. Download OpenAPI specification
+      # ------------------------------------------------------------
+      - name: Download OpenAPI specification
+        run: |
+          mkdir -p reports/openapi
+
+          curl --fail --silent \
+            --user "merchant-user:$MERCHANT_USER_PASSWORD" \
+            http://127.0.0.1:8080/v3/api-docs \
+            --output reports/openapi/openapi.json
+
+          jq empty reports/openapi/openapi.json
+
+          echo "Imported API paths:"
+          jq '.paths | keys' reports/openapi/openapi.json
+      # ------------------------------------------------------------
+      # 18. Run authenticated OWASP ZAP API scan
+      # ------------------------------------------------------------
+      - name: Run authenticated OWASP ZAP API scan
+        run: |
+          mkdir -p reports/zap-api
+          chmod 777 reports/zap-api
+
+          ZAP_BASIC_AUTH="Basic $(printf 'merchant-user:%s' \
+            "$MERCHANT_USER_PASSWORD" | base64 -w 0)"
+
+          echo "::add-mask::$ZAP_BASIC_AUTH"
+
+          docker run --rm \
+            --network host \
+            -e ZAP_AUTH_HEADER_VALUE="$ZAP_BASIC_AUTH" \
+            -e ZAP_AUTH_HEADER_SITE="127.0.0.1" \
+            -v "$GITHUB_WORKSPACE/reports/openapi:/zap/openapi:ro" \
+            -v "$GITHUB_WORKSPACE/reports/zap-api:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py \
+            -t /zap/openapi/openapi.json \
+            -f openapi \
+            -O 127.0.0.1:8080 \
+            -J zap-api-report.json \
+            -r zap-api-report.html \
+            -w zap-api-report.md \
+            -I
+
+          echo "Generated authenticated ZAP reports:"
+          ls -la reports/zap-api
+      # ------------------------------------------------------------
+      # 19. Run OWASP ZAP baseline DAST
       # ------------------------------------------------------------
       - name: Run OWASP ZAP baseline scan
         run: |
@@ -313,7 +359,7 @@ jobs:
           ls -la reports/zap
 
       # ------------------------------------------------------------
-      # 18. Stop DAST application container
+      # 20. Stop DAST application container
       # ------------------------------------------------------------
       - name: Stop application container
         if: always()
@@ -322,7 +368,7 @@ jobs:
           docker rm -f devsecops-lab-dast || true
 
       # ------------------------------------------------------------
-      # 19. Upload application JAR
+      # 21. Upload application JAR
       # ------------------------------------------------------------
       - name: Upload application artifact
         if: success()
@@ -334,7 +380,7 @@ jobs:
           retention-days: 7
 
       # ------------------------------------------------------------
-      # 20. Upload security reports
+      # 22. Upload security reports
       # Runs even when an earlier security step fails
       # ------------------------------------------------------------
       - name: Upload security reports
